@@ -49,10 +49,24 @@ numdf <- df[,c("Attrition", "Age","DailyRate","DistanceFromHome","Education","En
 # Look for redundant features:
 correlationMatrix <- cor(numdf[,2:dim(numdf)[2]]) # everything but "Attrition"
 print(correlationMatrix)
-corrplot(correlationMatrix, method="circle", type="upper")
+corrplot(correlationMatrix, method="circle", type="upper", order="hclust")
 highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5) # recommended cutoff = 0.75
 print(highlyCorrelated)
-colnames(numdf)[highlyCorrelated] # these variables have correlation > 0.5
+toremove <- colnames(numdf)[highlyCorrelated] # these variables have correlation > 0.5
+print(toremove)
+
+# Take a moment to plot the correlation matrix of the highlyCorrelated variables:
+numdf %>% select(StockOptionLevel, WorkLifeBalance, JobInvolvement, YearsAtCompany, YearsSinceLastPromotion, Attrition) %>%
+  ggpairs(aes(col=Attrition))
+
+pairs(~StockOptionLevel+WorkLifeBalance+JobInvolvement+YearsAtCompany+
+        YearsSinceLastPromotion, data=numdf)
+
+# now remove highly correlated variables and continue...Not clear if this is the correct way to proceed
+for (i in 1:length(toremove)) {
+  numdf[,toremove[i]] = NULL
+}
+
 
 # Rank Features by importance:
 # prepare training scheme
@@ -88,14 +102,21 @@ print(results)
 # list the chosen features
 predictors(results)
 # plot the results
-plot(results, type=c("g", "o"))
+plot(results, type=c("g", "o")) # run the model once with all features. Run pairwise plots of selected features. Check for correlated variables. Next, run thee model having removed highly correlated variables that were identified in the lvq varImp steps above. Again, run pairwise plots of selected features and check for correlation. At some point, we should also consider PCA. Once all of this wraps up, proceed with a k-nn and naive bayes classifer. K-NN decision boundaries could make it relatively easy to explain the relationship between the explanatory and response (i.e., Attrition) variables.
 
-model <- glm(Attrition ~ StockOptionLevel+Age+JobInvolvement+TotalWorkingYears+MonthlyIncome+
-               YearsAtCompany+JobLevel+YearsWithCurrManager+YearsInCurrentRole+WorkLifeBalance+
-               JobSatisfaction+NumCompaniesWorked+EnvironmentSatisfaction+RelationshipSatisfaction,
-             data=numdf)
-summary(model)
+#### A Stepwise Approach ####...Not going to work here, because this is a classification problem, not a regression problem.
+library(MASS)
+stepmodel <- lm(Attrition~., data = numdf)
+step <- stepAIC(stepmodel, direction = "both", trace = TRUE)
+step
 
+step.model <- train(Attrition ~., data = numdf,
+                    method = "lmStepAIC", 
+                    trControl = train.control,
+                    trace = FALSE
+                    )
+# Model accuracy
+step.model$results
 ```
 
 This will be helpful for later (a much cleaner way of partitioning train/test sets):
@@ -104,3 +125,9 @@ set.seed(998)
 inTraining <- createDataPartition(Sonar$Class, p = .75, list = FALSE)
 training <- Sonar[ inTraining,]
 testing  <- Sonar[-inTraining,]
+
+Helpful resources:
+http://topepo.github.io/caret/model-training-and-tuning.html#model-training-and-parameter-tuning
+http://topepo.github.io/caret/recursive-feature-elimination.html#rfe
+https://machinelearningmastery.com/an-introduction-to-feature-selection/
+https://machinelearningmastery.com/feature-selection-with-the-caret-r-package/
