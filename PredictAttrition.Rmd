@@ -1,0 +1,106 @@
+---
+title: "Attrition"
+author: "Steven Garrity"
+date: "11/16/2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Executive Summary:
+
+# Introduction to the Problem
+This is a classification problem.
+
+# Read data and plot
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(mlbench)
+library(caret)
+library(corrplot)
+library(randomForest)
+
+df <- read.csv('CaseStudy2-data.csv', header=TRUE)
+str(df)
+
+###SET UP A 6 X 6 GRID AND PLOT HISTOGRAMS FOR ALL VARIABLES###
+
+# df %>% select(Age, Education, Gender, WorkLifeBalance, Attrition) %>% ggpairs(aes(col=Attrition))
+
+# pairs(~Age+DailyRate+DistanceFromHome+Education+HourlyRate+TotalWorkingYears, data=df)
+
+# just found that "StandardHours" = 80 for all observations. Removing from further analysis:
+df$StandardHours <- NULL
+
+
+# Look at the data and see what you see. Like the bear, who went over the mountain. (?)
+# helpful guide: https://machinelearningmastery.com/feature-selection-with-the-caret-r-package/
+
+numdf <- df[,c("Attrition", "Age","DailyRate","DistanceFromHome","Education","EnvironmentSatisfaction",
+               "HourlyRate","JobInvolvement","JobLevel","JobSatisfaction","MonthlyIncome",
+               "MonthlyRate","NumCompaniesWorked","PercentSalaryHike",
+               "RelationshipSatisfaction","StockOptionLevel",
+               "TotalWorkingYears","TrainingTimesLastYear","WorkLifeBalance",
+               "YearsAtCompany","YearsInCurrentRole","YearsSinceLastPromotion",
+               "YearsWithCurrManager")]
+
+# Look for redundant features:
+correlationMatrix <- cor(numdf[,2:dim(numdf)[2]]) # everything but "Attrition"
+print(correlationMatrix)
+corrplot(correlationMatrix, method="circle", type="upper")
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5) # recommended cutoff = 0.75
+print(highlyCorrelated)
+colnames(numdf)[highlyCorrelated] # these variables have correlation > 0.5
+
+# Rank Features by importance:
+# prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+# train the model
+model <- train(Attrition~., data=numdf, method="lvq", preProcess="scale", trControl=control)
+# estimate variable importance
+importance <- varImp(model, scale=TRUE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance)
+
+# Feature Selection
+# define the control using a random forest selection function
+# control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# results <- rfe(numdf[,2:dim(numdf)[2]], numdf[,1], sizes=c(1:10), rfeControl=control)
+# run the RFE algorithm
+x <- numdf #### REMOVE HIGHLY CORRELATED FEATURES BEFORE DOING THIS STEP! ####
+normalization <- preProcess(x)
+x <- predict(normalization, x)
+x <- as.data.frame(x)
+subsets <- c(5, 10, 12, 14, 16, 18:20)
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 3,
+                   verbose = TRUE)
+
+results <- rfe(x[,2:dim(x)[2]], x[,1], sizes=subsets, rfeControl=ctrl)
+
+# summarize the results
+print(results)
+# list the chosen features
+predictors(results)
+# plot the results
+plot(results, type=c("g", "o"))
+
+model <- glm(Attrition ~ StockOptionLevel+Age+JobInvolvement+TotalWorkingYears+MonthlyIncome+
+               YearsAtCompany+JobLevel+YearsWithCurrManager+YearsInCurrentRole+WorkLifeBalance+
+               JobSatisfaction+NumCompaniesWorked+EnvironmentSatisfaction+RelationshipSatisfaction,
+             data=numdf)
+summary(model)
+
+```
+
+This will be helpful for later (a much cleaner way of partitioning train/test sets):
+library(caret)
+set.seed(998)
+inTraining <- createDataPartition(Sonar$Class, p = .75, list = FALSE)
+training <- Sonar[ inTraining,]
+testing  <- Sonar[-inTraining,]
