@@ -21,6 +21,9 @@ library(mlbench)
 library(caret)
 library(corrplot)
 library(randomForest)
+library(knncat)
+library(e1071)
+library(fastDummies)
 
 df <- read.csv('CaseStudy2-data.csv', header=TRUE)
 str(df)
@@ -31,26 +34,58 @@ str(df)
 
 # pairs(~Age+DailyRate+DistanceFromHome+Education+HourlyRate+TotalWorkingYears, data=df)
 
-# just found that "StandardHours" = 80 for all observations. Removing from further analysis:
+# Found that "StandardHours" = 80 for all observations. Removing from further analysis:
 df$StandardHours <- NULL
+# Found that "Over18" = Y for all observations. Removing from further analysis:
+df$Over18 <- NULL
+# Found that "EmployeeCount" = 1 for all observations. Removing from further analysis:
+df$EmployeeCount <- NULL
+# Remove observation ID and EmployeeNumber
+df$ID <- NULL
+df$EmployeeNumber <- NULL
+
+######## Feature Engineering #####
+# Proportion of Total Career Spent at Current Company
+df$TotalWorkingYears[df$TotalWorkingYears==0]=0.00001
+df$YearsAtCompany[df$YearsAtCompany==0]=0.00001
+df <- df %>% mutate(PropYearsCompany = YearsAtCompany/TotalWorkingYears)
+
+# Average Number of Years Per Company
+df$NumCompaniesWorked[df$NumCompaniesWorked==0]=0.00001
+df <- df %>% mutate(AvgYearsPerCompany = TotalWorkingYears/NumCompaniesWorked)
+
+# Average Years Per Company - Years At Company
+df <- df %>% mutate(YrPerCompMinusYrAtCompany = AvgYearsPerCompany - YearsAtCompany)
+
+
 
 
 # Look at the data and see what you see. Like the bear, who went over the mountain. (?)
 # helpful guide: https://machinelearningmastery.com/feature-selection-with-the-caret-r-package/
 
-numdf <- df[,c("Attrition", "Age","DailyRate","DistanceFromHome","Education","EnvironmentSatisfaction",
-               "HourlyRate","JobInvolvement","JobLevel","JobSatisfaction","MonthlyIncome",
-               "MonthlyRate","NumCompaniesWorked","PercentSalaryHike",
-               "RelationshipSatisfaction","StockOptionLevel",
-               "TotalWorkingYears","TrainingTimesLastYear","WorkLifeBalance",
-               "YearsAtCompany","YearsInCurrentRole","YearsSinceLastPromotion",
-               "YearsWithCurrManager")]
+
+```
+
+
+```{r}
+must_convert <- sapply(df,is.factor)
+converted_features <- sapply(df[,must_convert],unclass)
+numdf <- cbind(df[,!must_convert],converted_features)
+numdf$Attrition <- df$Attrition
+ 
+
+# This will be useful for regression:
+# numdf <- dummy_cols(df, select_columns = c("BusinessTravel","Department",
+#                                            "Gender", "JobRole",
+#                                            "MaritalStatus","OverTime"),
+#                      remove_selected_columns = TRUE)
 
 # Look for redundant features:
-correlationMatrix <- cor(numdf[,2:dim(numdf)[2]]) # everything but "Attrition"
+# correlationMatrix <- cor(numdf[,2:dim(numdf)[2]]) # everything but "Attrition"
+correlationMatrix <- cor(numdf[,!names(numdf) %in% "Attrition"]) # everything but "Attrition"
 print(correlationMatrix)
 corrplot(correlationMatrix, method="circle", type="upper", order="hclust")
-highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5) # recommended cutoff = 0.75
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75) # recommended cutoff = 0.75
 print(highlyCorrelated)
 toremove <- colnames(numdf)[highlyCorrelated] # these variables have correlation > 0.5
 print(toremove)
@@ -69,18 +104,25 @@ for (i in 1:length(toremove)) {
 
 
 # Rank Features by importance:
+# first remove highly correlated features:
+numdf$TotalWorkingYears <- NULL
+numdf$YearsWithCurrManager <- NULL
+numdf$PerformanceRating <- NULL
+numdf$Department <- NULL
 # prepare training scheme
 control <- trainControl(method="repeatedcv", number=10, repeats=3)
 # train the model
-model <- train(Attrition~., data=numdf, method="lvq", preProcess="scale", trControl=control)
+model <- train(Attrition~., data=numdf, method="lvq", preProcess=c("scale","center"), trControl=control, metric = "Kappa")
 # estimate variable importance
 importance <- varImp(model, scale=TRUE)
 # summarize importance
 print(importance)
 # plot importance
 plot(importance)
+```
 
-# Feature Selection
+# Feature Selection:
+```{r}
 # define the control using a random forest selection function
 # control <- rfeControl(functions=rfFuncs, method="cv", number=10)
 # results <- rfe(numdf[,2:dim(numdf)[2]], numdf[,1], sizes=c(1:10), rfeControl=control)
@@ -93,16 +135,17 @@ subsets <- c(5, 10, 12, 14, 16, 18:20)
 ctrl <- rfeControl(functions = rfFuncs,
                    method = "repeatedcv",
                    repeats = 3,
-                   verbose = TRUE)
+                   verbose = TRUE,
+                   allowParallel = TRUE)
 
-results <- rfe(x[,2:dim(x)[2]], x[,1], sizes=subsets, rfeControl=ctrl)
+results <- rfe(x[,!names(numdf) %in% "Attrition"], x$Attrition, sizes=subsets, rfeControl=ctrl, metric = "Kappa")
 
 # summarize the results
 print(results)
 # list the chosen features
 predictors(results)
 # plot the results
-plot(results, type=c("g", "o")) # run the model once with all features. Run pairwise plots of selected features. Check for correlated variables. Next, run thee model having removed highly correlated variables that were identified in the lvq varImp steps above. Again, run pairwise plots of selected features and check for correlation. At some point, we should also consider PCA. Once all of this wraps up, proceed with a k-nn and naive bayes classifer. K-NN decision boundaries could make it relatively easy to explain the relationship between the explanatory and response (i.e., Attrition) variables.
+plot(results, type=c("g", "o")) # run the model once with all features. Run pairwise plots of selected features. Check for correlated variables. Next, run the model having removed highly correlated variables that were identified in the lvq varImp steps above. Again, run pairwise plots of selected features and check for correlation. At some point, we should also consider PCA. Once all of this wraps up, proceed with a k-nn and naive bayes classifer. K-NN decision boundaries could make it relatively easy to explain the relationship between the explanatory and response (i.e., Attrition) variables.
 
 #### A Stepwise Approach ####...Not going to work here, because this is a classification problem, not a regression problem.
 library(MASS)
@@ -131,3 +174,186 @@ http://topepo.github.io/caret/model-training-and-tuning.html#model-training-and-
 http://topepo.github.io/caret/recursive-feature-elimination.html#rfe
 https://machinelearningmastery.com/an-introduction-to-feature-selection/
 https://machinelearningmastery.com/feature-selection-with-the-caret-r-package/
+
+# Try knncat:
+```{r}
+# first scale numeric observations:
+# num_df <- df %>% select("Age","DailyRate","DistanceFromHome","Education","EnvironmentSatisfaction",
+#                "HourlyRate","JobInvolvement","JobLevel","JobSatisfaction","MonthlyIncome",
+#                "MonthlyRate","NumCompaniesWorked","PercentSalaryHike", "PerformanceRating",
+#                "RelationshipSatisfaction","StockOptionLevel",
+#                "TotalWorkingYears","TrainingTimesLastYear","WorkLifeBalance",
+#                "YearsAtCompany","YearsInCurrentRole","YearsSinceLastPromotion",
+#                "YearsWithCurrManager", "PropYearsCompany", "AvgYearsPerCompany",
+#                "YrPerCompMinusYrAtCompany")
+
+num_df <- df %>% select("DistanceFromHome","EnvironmentSatisfaction",
+               "JobInvolvement","JobLevel","JobSatisfaction","MonthlyIncome",
+               "NumCompaniesWorked","StockOptionLevel","TotalWorkingYears","WorkLifeBalance",
+               "YearsAtCompany","YearsInCurrentRole","YearsSinceLastPromotion",
+               "YearsWithCurrManager", "PropYearsCompany", "AvgYearsPerCompany",
+               "YrPerCompMinusYrAtCompany")
+
+scaled_df <- num_df %>% mutate_each(funs(scale(.) %>% as.vector))
+
+cat_df <- df %>% select("BusinessTravel","Department","Gender",
+                        "JobRole","MaritalStatus","OverTime")
+
+temp <- cbind(scaled_df,cat_df)
+temp$Attrition <- df$Attrition
+
+
+set.seed(10)
+inTraining <- createDataPartition(temp$Attrition, p=0.70, list=FALSE)
+train_df <- temp[inTraining,]
+test_df <- temp[-inTraining,]
+
+test_knn <- knncat(train_df, test_df, k=c(9,11,13, 15, 18, 21,22,23,25), knots=4, xvals=5, prior.ind=1, verbose=1, classcol = 24)
+
+test_df$binaryAttrition = 0
+test_df$binaryAttrition[test_df$Attrition=="Yes"] = 1
+test_df$binaryAttrition = as.factor(test_df$binaryAttrition)
+test_df$classification <- as.factor(test_knn$test.classes)
+confusionMatrix(test_df$classification, test_df$binaryAttrition)
+
+temp1 <- predict(test_knn, train_df, temp[,1:23])
+confusionMatrix(table(temp1, temp$Attrition))
+
+### naive bayes classifier
+set.seed(10)
+inTraining <- createDataPartition(temp$Attrition, p=0.85, list=FALSE)
+train_df <- temp[inTraining,]
+test_df <- temp[-inTraining,]
+
+model = naiveBayes(Attrition~.,data = train_df, laplace = 100)
+table(predict(model,test_df[,c(1:23)]), test_df$Attrition)
+CM = confusionMatrix(table(predict(model,test_df[,c(1:23)]), test_df$Attrition))
+CM
+
+### naive bayes classifier (without scaling)
+set.seed(sample(1:1000,1))
+inTraining <- createDataPartition(df$Attrition, p=0.8, list=FALSE)
+train_df <- df[inTraining,]
+test_df <- df[-inTraining,]
+newdata = data.frame(test_df)
+newdata$Attrition <- NULL
+
+model = naiveBayes(Attrition~.,data = train_df, laplace = 100)
+table(predict(model,newdata), test_df$Attrition)
+CM = confusionMatrix(table(predict(model,newdata), test_df$Attrition))
+CM
+
+### naive bayes (caret package, without scaling, LOOCV)
+# define training control
+train_control <- trainControl(method="LOOCV")
+# train the model
+model <- train(Attrition~., data=df, trControl=train_control, search="grid", method="nb")
+# summarize results
+print(model)
+
+CM = confusionMatrix(table(predict(model,df), df$Attrition))
+CM
+```
+
+# KNN
+```{r}
+num_df <- df %>% select("Attrition","OverTime","AvgYearsPerCompany","StockOptionLevel",
+                        "MonthlyIncome","Age","MaritalStatus","YearsAtCompany",
+                        "YearsInCurrentRole","JobInvolvement","YearsAtCompany",
+                        "JobRole","JobLevel","JobSatisfaction")
+
+knn_df <- dummy_cols(num_df, select_columns = c("OverTime","MaritalStatus",
+                                                "JobRole"), 
+                     remove_selected_columns = TRUE)
+
+
+# JobI <- dummy_cols(df$JobInvolvement)
+# JobR <- dummy_cols(df$JobRole)
+# Gender <- dummy_cols(df$Gender)
+# BusinessT <- dummy_cols(df$BusinessTravel)
+# JobL <- dummy_cols(df$JobLevel)
+# knn_df <- num_df
+# knn_df$Attrition <- df$Attrition
+# knn_df <- cbind(knn_df,JobI[,2:5])
+# knn_df <- cbind(knn_df,JobR[,2:10])
+# # knn_df <- cbind(knn_df,Gender[,2:3])
+# knn_df <- cbind(knn_df,BusinessT[,2:4])
+# knn_df <- cbind(knn_df,JobL[,2:6])
+
+set.seed(123)
+seeds <- vector(mode = "list", length = 101)
+for(i in 1:100) seeds[[i]] <- sample.int(1000, 22)
+
+## For the last model:
+seeds[[101]] <- sample.int(1000, 1)
+
+ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 10,
+                     seeds = seeds,
+                     allowParallel = TRUE)
+# ctrl <- trainControl(method = "adaptive_cv",
+#                      repeats = 10,
+#                      # seeds = seeds,
+#                      allowParallel = TRUE)
+
+set.seed(1)
+mod <- train(Attrition ~ ., data = knn_df,
+             method = "knn",
+             # tuneLength = 13,
+             tuneGrid = expand.grid(k = c(1,2,3,4,5,7,9,11,13,15,18,21,25,29)),
+             preProcess = c("center","scale"),
+             trControl = ctrl, 
+             metric="Kappa")
+
+CM_knn = confusionMatrix(table(predict(mod, knn_df[,!names(knn_df) %in% "Attrition"]), knn_df$Attrition))
+CM_knn
+```
+
+# Naive Bayes
+```{r}
+
+# # define training control
+# train_control <- trainControl(method="LOOCV")
+# # train the model
+# model <- train(Attrition~., data=knn_df, 
+#                trControl=train_control, 
+#                search="grid", 
+#                metric="Kappa",
+#                method="nb")
+# # summarize results
+# print(model)
+# 
+# CM = confusionMatrix(table(predict(model,knn_df[,!names(knn_df) %in% "Attrition"]), knn_df$Attrition))
+# CM
+
+#############
+train_control <- trainControl(method="repeatedcv",
+                              repeats = 2,
+                              allowParallel = TRUE)
+
+search_grid <- expand.grid(
+  usekernel = TRUE,
+  fL = 0,
+  adjust = seq(1, 7, by = 1))
+
+# train model
+nb_model <- train(Attrition~., data=knn_df,
+                  method = "nb",
+                  trControl = train_control,
+                  tuneGrid = search_grid,
+                  # search = "grid",
+                  metric = "Kappa",
+                  # preProcess = c("center", "scale"))
+
+# top 5 models
+nb_model$results %>% 
+  top_n(5, wt = Accuracy) %>%
+  arrange(desc(Accuracy))
+
+# plot parameter tuning
+plot(nb_model)
+
+# confusion matrix
+confusionMatrix(nb_model)
+pred <- predict(nb_model, knn_df[,!names(knn_df) %in% "Attrition"])
+confusionMatrix(pred,knn_df$Attrition)
