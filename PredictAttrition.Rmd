@@ -334,26 +334,76 @@ train_control <- trainControl(method="repeatedcv",
 search_grid <- expand.grid(
   usekernel = TRUE,
   fL = 0,
-  adjust = seq(1, 7, by = 1))
+  adjust = seq(1, 8, by = 1))
 
 # train model
-nb_model <- train(Attrition~., data=knn_df,
+nb_A <- train(Attrition~., data=knn_df,
+                  method = "nb",
+                  trControl = train_control,
+                  tuneGrid = search_grid,
+                  # search = "grid",
+                  metric = "Accuracy",
+                  preProcess = c("BoxCox"))
+
+# top 5 models
+nb_A$results %>% 
+  top_n(5, wt = Accuracy) %>%
+  arrange(desc(Accuracy))
+
+# plot parameter tuning
+plot(nb_A)
+
+# confusion matrix
+confusionMatrix(nb_A)
+pred_A <- predict(nb_A, knn_df[,!names(knn_df) %in% "Attrition"])
+confusionMatrix(pred_A,knn_df$Attrition)
+
+
+########################3
+##### now optimize Kappa
+search_grid <- expand.grid(
+  usekernel = c(TRUE,FALSE),
+  fL = 0:1,
+  adjust = seq(1, 8, by = 1))
+
+# train model
+nb_K <- train(Attrition~., data=knn_df,
                   method = "nb",
                   trControl = train_control,
                   tuneGrid = search_grid,
                   # search = "grid",
                   metric = "Kappa",
-                  # preProcess = c("center", "scale"))
+                  preProcess = c("BoxCox"))
 
 # top 5 models
-nb_model$results %>% 
-  top_n(5, wt = Accuracy) %>%
-  arrange(desc(Accuracy))
+nb_K$results %>% 
+  top_n(5, wt = Kappa) %>%
+  arrange(desc(Kappa))
 
 # plot parameter tuning
-plot(nb_model)
+plot(nb_K)
 
 # confusion matrix
-confusionMatrix(nb_model)
-pred <- predict(nb_model, knn_df[,!names(knn_df) %in% "Attrition"])
-confusionMatrix(pred,knn_df$Attrition)
+confusionMatrix(nb_K)
+pred_K <- predict(nb_K, knn_df[,!names(knn_df) %in% "Attrition"])
+confusionMatrix(pred_K,knn_df$Attrition)
+
+
+
+##### Now combine the two models
+pred_df <- data.frame("pred_A" = pred_A, "pred_K" = pred_K)
+pred_df$pred_E <- NA
+pred_df$pred_E[pred_df$pred_A=="No" & pred_df$pred_K=="No"] <- "No"
+pred_df$pred_E[pred_df$pred_A=="Yes" & pred_df$pred_K=="Yes"] <- "Yes"
+pred_df$pred_E[pred_df$pred_A=="No" & pred_df$pred_K=="Yes"] <- "No"
+pred_df$pred_E[pred_df$pred_A=="Yes" & pred_df$pred_K=="No"] <- "No"
+
+confusionMatrix(as.factor(pred_df$pred_E),knn_df$Attrition)
+
+```
+
+# Logistic Regression
+```{r}
+
+
+```
