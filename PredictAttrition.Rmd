@@ -24,6 +24,10 @@ library(randomForest)
 library(knncat)
 library(e1071)
 library(fastDummies)
+library(RWeka)
+library(doSNOW)
+library(parallel)
+
 
 df <- read.csv('CaseStudy2-data.csv', header=TRUE)
 str(df)
@@ -404,6 +408,71 @@ confusionMatrix(as.factor(pred_df$pred_E),knn_df$Attrition)
 
 # Logistic Regression
 ```{r}
+lfit <- glm(relevel(Attrition, ref="No")~., family=binomial(), data=num_df)
+summary(lfit)
+
+l_df <- num_df %>% select("Attrition","OverTime","AvgYearsPerCompany","MaritalStatus",
+                          "YearsInCurrentRole","JobInvolvement","JobRole","JobSatisfaction")
+lfit <- glm(relevel(Attrition, ref="No")~., family=binomial(), data=l_df)
+summary(lfit)
+
+ltest <- data.frame("Attrition"=df$Attrition)
+ltest$probs <- predict(lfit, type="response")
+ltest$predict <- if_else(ltest$probs > 0.5, "Yes","No")
+
+confusionMatrix(as.factor(ltest$predict),df$Attrition)
+
+##############
+# try something different
+numberofcores = detectCores()
+cl <- makeCluster(numberofcores, type = "SOCK")
+# Register cluster so that caret will know to train in parallel.
+registerDoSNOW(cl)
+
+
+
+
+ctrl <- trainControl(method = "cv", number = 5, classProbs = TRUE, allowParallel = TRUE, search="grid")
+# m <- train(Attrition~.,data=num_df, 
+#                              method = "LogitBoost", 
+#                              trControl = ctrl,
+#                              nIter=5,
+#                              metric = "Accuracy", 
+#                              preProc = c("BoxCox","center", "scale"))
+
+m <- train(Attrition~.,data=numdf,
+           trControl = ctrl,
+           method = "ada",
+           tuneLength=6,
+           metric="Kappa",
+           preProc = c("BoxCox","center", "scale"))
+
+confusionMatrix(predict(m,numdf[,!names(numdf) %in% "Attrition"]),df$Attrition)
+importance <- varImp(m, scale=TRUE)
+# summarize importance
+# print(importance)
+# plot importance
+plot(importance)
+
+ggplot(m)
+
+```
+
+# Combine all models
+```{r}
+pred_df$logistic <- as.factor(ltest$predict)
+
+pred_df$pred_E[pred_df$pred_A=="No" & pred_df$pred_K=="No" & pred_df$logistic=="No"] <- "No"
+pred_df$pred_E[pred_df$pred_A=="Yes" & pred_df$pred_K=="Yes" & pred_df$logistic=="Yes"] <- "Yes"
+pred_df$pred_E[pred_df$pred_A=="No" & pred_df$pred_K=="Yes" & pred_df$logistic=="Yes"] <- "Yes"
+pred_df$pred_E[pred_df$pred_A=="No" & pred_df$pred_K=="No" & pred_df$logistic=="Yes"] <- "No"
+pred_df$pred_E[pred_df$pred_A=="No" & pred_df$pred_K=="Yes" & pred_df$logistic=="No"] <- "No"
+pred_df$pred_E[pred_df$pred_A=="Yes" & pred_df$pred_K=="No" & pred_df$logistic=="No"] <- "No"
+pred_df$pred_E[pred_df$pred_A=="Yes" & pred_df$pred_K=="No" & pred_df$logistic=="Yes"] <- "Yes"
+pred_df$pred_E[pred_df$pred_A=="Yes" & pred_df$pred_K=="Yes" & pred_df$logistic=="No"] <- "Yes"
+
+
+confusionMatrix(as.factor(pred_df$pred_E),knn_df$Attrition)
 
 
 ```
