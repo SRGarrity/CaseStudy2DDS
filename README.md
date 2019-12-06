@@ -18,3 +18,8 @@ See the Rmarkdown file "PredictSalary.Rmd" for details. Main components:
 2. Evaluate model performance and select a final model for making predictions
 4. Run model on unlabeled data ("CaseStudy2CompSet No Salary.csv") and provide predictions ("Salary_Predictions.csv")
 
+## Presentation:
+1. Slide deck summarizing the data analysis and conclusions ("CaseStudy2.pptx")
+2. YouTube presentation of slide deck ("https://youtube.com")
+
+
