@@ -1,0 +1,209 @@
+---
+title: "PredictSalary"
+author: "Steven Garrity"
+date: "12/5/2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Load Packages:
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+# library(mlbench)
+library(caret)
+library(corrplot)
+# library(randomForest)
+# library(e1071)
+library(fastDummies)
+# library(RWeka)
+library(doSNOW)
+library(parallel)
+library(lmvar)
+```
+
+# Set up system for using parallel processing during model training
+```{r}
+numberofcores = detectCores() # number of cores available on machine
+cl <- makeCluster(numberofcores, type = "SOCK")
+# Register cluster so that caret will know to train in parallel.
+registerDoSNOW(cl)
+```
+
+# Import Data
+```{r}
+df <- read.csv('CaseStudy2-data.csv', header=TRUE)
+str(df)
+df <- df %>% select(-c(StandardHours,Over18,EmployeeCount,EmployeeNumber,ID,
+                       PerformanceRating,Department,Attrition,MaritalStatus))
+```
+
+# Feature Engineering
+```{r}
+# Proportion of Total Career Spent at Current Company
+df$TotalWorkingYears[df$TotalWorkingYears==0]=0.00001
+df$YearsAtCompany[df$YearsAtCompany==0]=0.00001
+df <- df %>% mutate(PropYearsCompany = YearsAtCompany/TotalWorkingYears)
+
+# Average Number of Years Per Company
+df$NumCompaniesWorked[df$NumCompaniesWorked==0]=0.00001
+df <- df %>% mutate(AvgYearsPerCompany = TotalWorkingYears/NumCompaniesWorked)
+
+# Average Years Per Company - Years At Company
+df <- df %>% mutate(YrPerCompMinusYrAtCompany = AvgYearsPerCompany - YearsAtCompany)
+```
+
+# Prepare data for multiple linear regression
+```{r}
+reg_df <- dummy_cols(df, select_columns = c("EducationField", "Gender","JobRole",
+                                            "OverTime","BusinessTravel"), 
+                     remove_selected_columns = TRUE)
+```
+
+
+# Fit models
+```{r}
+# # Set seed for reproducibility
+# set.seed(123)
+# # Set up repeated k-fold cross-validation
+# tc <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+# # Train the model
+# step_model <- train(MonthlyIncome ~., data = reg_df,
+#                     preProcess = c("BoxCox","center","scale"),
+#                     method = "leapBackward", 
+#                     tuneGrid = data.frame(nvmax = 1:10),
+#                     trControl = tc,
+#                     metric="RMSE")
+# step_model$results
+
+```
+
+```{r}
+# reg_df$logIncome <- log(reg_df$MonthlyIncome)
+# reg_df$MonthlyIncome <- NULL
+# scaled_df <- reg_df %>% select(-logIncome) %>% mutate_each(funs(scale(.) %>% as.vector))
+# scaled_df$logIncome <- reg_df$logIncome
+scaled_df <- reg_df %>% select(-MonthlyIncome) %>% mutate_each(funs(scale(.) %>% as.vector))
+scaled_df$Income <- reg_df$MonthlyIncome
+
+fullmod <- glm(Income ~ ., data=scaled_df, x=TRUE, y=TRUE)
+summary(fullmod)
+RSS_fullmod <- c(crossprod(fullmod$residuals))
+MSE_fullmod <- RSS_fullmod / length(fullmod$residuals)
+RMSE_fullmod <- sqrt(MSE_fullmod)
+plot(scaled_df$Income,fullmod$fitted.values)
+
+backmod <- step(fullmod, trace = 0, x=TRUE, y=TRUE)
+formula(backmod)
+summary(backmod)
+RSS_backmod <- c(crossprod(backmod$residuals))
+MSE_backmod <- RSS_backmod / length(backmod$residuals)
+RMSE_backmod <- sqrt(MSE_backmod)
+plot(scaled_df$Income,backmod$fitted.values)
+
+backmod <- step(fullmod, trace = 0, x=TRUE, y=TRUE)
+formula(backmod)
+summary(backmod)
+RSS_backmod <- c(crossprod(backmod$residuals))
+MSE_backmod <- RSS_backmod / length(backmod$residuals)
+RMSE_backmod <- sqrt(MSE_backmod)
+plot(scaled_df$Income,backmod$fitted.values)
+
+nullmod <- lm(Income ~ JobLevel,data=scaled_df)
+
+formod = step(nullmod, scope=list(lower=formula(nullmod),
+                         upper=formula(fullmod)), direction="forward")
+formula(formod)
+summary(formod)
+RSS_formod <- c(crossprod(formod$residuals))
+MSE_formod <- RSS_backmod / length(formod$residuals)
+RMSE_formod <- sqrt(MSE_formod)
+plot(scaled_df$Income,formod$fitted.values)
+
+stepmod = step(nullmod, list(lower=formula(nullmod),upper=formula(fullmod)),
+               direction="both",trace=0)
+formula(stepmod)
+summary(stepmod)
+RSS_stepmod <- c(crossprod(stepmod$residuals))
+MSE_stepmod <- RSS_backmod / length(stepmod$residuals)
+RMSE_stepmod <- sqrt(MSE_formod)
+plot(scaled_df$Income,stepmod$fitted.values)
+
+############ CV to find model with lowest RMSE ##############
+backmod2 = lm(formula(backmod), data=scaled_df, x=TRUE, y=TRUE)
+formod2 = lm(formula(formod), data=scaled_df, x=TRUE, y=TRUE)
+stepmod2 = lm(formula(stepmod), data=scaled_df, x=TRUE, y=TRUE)
+
+rmse_Full = 0
+rmse_Back = 0
+rmse_For = 0
+rmse_Step = 0
+for (i in c(1:20)) {
+  fu <- cv.lm(fullmod, k=10, seed=i)
+  ba <- cv.lm(backmod2, k=10, seed=i)
+  fo <- cv.lm(formod2, k=10, seed=i)
+  st <- cv.lm(stepmod2, k=10, seed=i)
+  
+  rmse_Full=rmse_Full + fu$MSE_sqrt[[1]]
+  rmse_Back=rmse_Back + ba$MSE_sqrt[[1]]
+  rmse_For=rmse_For + fo$MSE_sqrt[[1]]
+  rmse_Step=rmse_Step + st$MSE_sqrt[[1]]
+}   
+
+rmse_Full/20 # 1081.402
+rmse_Back/20 # 1055.917
+rmse_For/20 # 1055.917
+rmse_Step/20 # 1055.195
+
+### Now use CV to determine whether or not Gender_Female and DistanceFromHome should be included in the final model
+step_wo_Gender_Female <- lm(Income~JobLevel + `JobRole_Research Director` +
+                              JobRole_Manager + TotalWorkingYears + 
+                              `JobRole_Laboratory Technician` +
+                              BusinessTravel_Travel_Rarely +
+                              `JobRole_Manufacturing Director` +
+                              MonthlyRate + PropYearsCompany +
+                              YearsSinceLastPromotion + DailyRate +
+                              DistanceFromHome, data=scaled_df,
+                            x=TRUE, y=TRUE)
+step_wo_DistanceFromHome <- lm(Income~JobLevel + `JobRole_Research Director` +
+                              JobRole_Manager + TotalWorkingYears + 
+                              `JobRole_Laboratory Technician` +
+                              BusinessTravel_Travel_Rarely +
+                              `JobRole_Manufacturing Director` +
+                              MonthlyRate + PropYearsCompany +
+                              YearsSinceLastPromotion + DailyRate +
+                              Gender_Female, data=scaled_df,
+                              x=TRUE, y=TRUE)
+step_wo_Either <- lm(Income~JobLevel + `JobRole_Research Director` +
+                              JobRole_Manager + TotalWorkingYears + 
+                              `JobRole_Laboratory Technician` +
+                              BusinessTravel_Travel_Rarely +
+                              `JobRole_Manufacturing Director` +
+                              MonthlyRate + PropYearsCompany +
+                              YearsSinceLastPromotion + DailyRate, data=scaled_df,
+                     x=TRUE, y=TRUE)
+
+rmse_wo_Gender_Female = 0
+rmse_wo_DistanceFromHome = 0
+rmse_wo_Either = 0
+rmse_base = 0
+for (i in c(1:20)) {
+  ba <- cv.lm(stepmod2, k=10, seed=i)
+  woG <- cv.lm(step_wo_Gender_Female, k=10, seed=i)
+  woD <- cv.lm(step_wo_DistanceFromHome, k=10, seed=i)
+  woE <- cv.lm(step_wo_Either, k=10, seed=i)
+  
+  rmse_base=rmse_base + ba$MSE_sqrt[[1]]
+  rmse_wo_Gender_Female=rmse_wo_Gender_Female+ woG$MSE_sqrt[[1]]
+  rmse_wo_DistanceFromHome=rmse_wo_DistanceFromHome + woD$MSE_sqrt[[1]]
+  rmse_wo_Either=rmse_wo_Either + woE$MSE_sqrt[[1]]
+} 
+
+rmse_base/20 # 
+rmse_wo_Gender_Female/20 # 
+rmse_wo_DistanceFromHome/20 # 
+rmse_wo_Either/20 #
+
+
+```
