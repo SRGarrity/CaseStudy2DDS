@@ -6,18 +6,14 @@ output: html_document
 editor_options: 
   chunk_output_type: console
 ---
+# This is code for building a multiple linear regression model for predicting employee monthly salary.
+
 # Load Packages:
 ```{r}
 library(tidyverse)
 library(ggplot2)
 library(GGally)
-# library(mlbench)
-library(caret)
-library(corrplot)
-# library(randomForest)
-# library(e1071)
 library(fastDummies)
-# library(RWeka)
 library(doSNOW)
 library(parallel)
 library(lmvar)
@@ -28,10 +24,10 @@ library(MASS)
 
 # Set up system for using parallel processing during model training
 ```{r}
-numberofcores = detectCores() # number of cores available on machine
-cl <- makeCluster(numberofcores, type = "SOCK")
-# Register cluster so that caret will know to train in parallel.
-registerDoSNOW(cl)
+# numberofcores = detectCores() # number of cores available on machine
+# cl <- makeCluster(numberofcores, type = "SOCK")
+# # Register cluster so that caret will know to train in parallel.
+# registerDoSNOW(cl)
 ```
 
 # Import Data
@@ -59,6 +55,7 @@ df <- df %>% mutate(YrPerCompMinusYrAtCompany = AvgYearsPerCompany - YearsAtComp
 
 # Prepare data for multiple linear regression
 ```{r}
+# create dummy variables for categorical features
 reg_df <- dummy_cols(df, select_columns = c("EducationField", "Gender","JobRole",
                                             "OverTime","BusinessTravel"), 
                      remove_selected_columns = TRUE)
@@ -67,10 +64,6 @@ reg_df <- dummy_cols(df, select_columns = c("EducationField", "Gender","JobRole"
 
 # Fit models using backward/forward/stepwise selection
 ```{r}
-# reg_df$logIncome <- log(reg_df$MonthlyIncome)
-# reg_df$MonthlyIncome <- NULL
-# scaled_df <- reg_df %>% select(-logIncome) %>% mutate_each(funs(scale(.) %>% as.vector))
-# scaled_df$logIncome <- reg_df$logIncome
 scaled_df <- reg_df %>% select(-MonthlyIncome) %>% mutate_each(funs(scale(.) %>% as.vector))
 scaled_df$Income <- reg_df$MonthlyIncome
 
@@ -89,15 +82,7 @@ MSE_backmod <- RSS_backmod / length(backmod$residuals)
 RMSE_backmod <- sqrt(MSE_backmod)
 plot(scaled_df$Income,backmod$fitted.values)
 
-backmod <- step(fullmod, trace = 0, x=TRUE, y=TRUE)
-formula(backmod)
-summary(backmod)
-RSS_backmod <- c(crossprod(backmod$residuals))
-MSE_backmod <- RSS_backmod / length(backmod$residuals)
-RMSE_backmod <- sqrt(MSE_backmod)
-plot(scaled_df$Income,backmod$fitted.values)
-
-nullmod <- lm(Income ~ JobLevel,data=scaled_df)
+nullmod <- lm(Income ~ 1,data=scaled_df)
 
 formod = step(nullmod, scope=list(lower=formula(nullmod),
                          upper=formula(fullmod)), direction="forward")
@@ -116,8 +101,12 @@ RSS_stepmod <- c(crossprod(stepmod$residuals))
 MSE_stepmod <- RSS_backmod / length(stepmod$residuals)
 RMSE_stepmod <- sqrt(MSE_formod)
 plot(scaled_df$Income,stepmod$fitted.values)
+```
 
-############ CV to find model with lowest RMSE ##############
+# Repeated CV to select final model:
+```{r}
+### Step 1: Compare full, forward, backward, and stepwise models:
+
 backmod2 = lm(formula(backmod), data=scaled_df, x=TRUE, y=TRUE)
 formod2 = lm(formula(formod), data=scaled_df, x=TRUE, y=TRUE)
 stepmod2 = lm(formula(stepmod), data=scaled_df, x=TRUE, y=TRUE)
@@ -143,7 +132,8 @@ rmse_Back/20 # 1055.917
 rmse_For/20 # 1055.917
 rmse_Step/20 # 1055.195 ********WINNER********
 
-### Now use CV to determine whether or not Gender_Female and DistanceFromHome should be included in the final model
+### Now use CV to determine whether or not Gender_Female and DistanceFromHome should be included in the final mode:
+
 step_wo_Gender_Female <- lm(Income~JobLevel + `JobRole_Research Director` +
                               JobRole_Manager + TotalWorkingYears + 
                               `JobRole_Laboratory Technician` +
@@ -191,11 +181,13 @@ rmse_base/20 # 1055.195***********WINNER*********
 rmse_wo_Gender_Female/20 # 1055.543
 rmse_wo_DistanceFromHome/20 # 1055.442
 rmse_wo_Either/20 # 1055.826
+```
 
-########## A few more diagnostics:
+# Regression Model Diagnostics:
+```{r}
 # check to make sure that we don't have problems with multicolinearity
 step_vif <- vif(stepmod2)
-
+step_vif
 
 fullmod_eval <- lm(Income ~ ., data=scaled_df)
 k <- ols_step_both_p(fullmod_eval, pent=0.15, prem=0.2)
@@ -230,45 +222,41 @@ qqline(studres(stepmod2), col="grey10")
 hist(stepmod2$residuals, prob=TRUE, xlab="residual (observed-predicted)", main="Histogram of Residuals",ylim=c(0,4e-04))
 lines(density(stepmod2$residuals), col="dodgerblue")
 dev.off()
-
-
 ```
 
-# Load unlabeled data and predict
+# Load unlabeled data and predict:
 ```{r}
-dfu <- readxl::read_xlsx('CaseStudy2CompSet No Salary.xlsx')
-str(dfu)
-dfu <- dfu %>% select(-c(StandardHours,Over18,EmployeeCount,EmployeeNumber,ID,
-                       PerformanceRating,Department,Attrition,MaritalStatus))
-
-# Proportion of Total Career Spent at Current Company
-dfu$TotalWorkingYears[dfu$TotalWorkingYears==0]=0.00001
-dfu$YearsAtCompany[dfu$YearsAtCompany==0]=0.00001
-dfu <- dfu %>% mutate(PropYearsCompany = YearsAtCompany/TotalWorkingYears)
-
-reg_dfu <- dummy_cols(dfu, select_columns = c("EducationField", "Gender","JobRole",
-                                            "OverTime","BusinessTravel"), 
-                     remove_selected_columns = TRUE)
-
-scaled_dfu <- reg_dfu %>% mutate_each(funs(scale(.) %>% as.vector))
-
-scaled_dfu <- scaled_dfu %>% select(JobLevel, `JobRole_Research Director`,
-                              JobRole_Manager, TotalWorkingYears, 
-                              `JobRole_Laboratory Technician`,
-                              BusinessTravel_Travel_Rarely,
-                              `JobRole_Manufacturing Director`,
-                              MonthlyRate, PropYearsCompany,
-                              YearsSinceLastPromotion, DailyRate,
-                              Gender_Female, DistanceFromHome)
-
-predict_df <- data.frame(predict(stepmod2,scaled_dfu))
-
-##### Write prediction to file:
-dfu <- readxl::read_xlsx('CaseStudy2CompSet No Salary.xlsx')
-
-predict_submit <- data.frame("ID"=dfu$ID, "MonthlyIncome"=predict_df$predict.stepmod2..scaled_dfu.)
-
-write_csv(predict_submit,'./Salary_Predictions.csv')
-
-
+# dfu <- readxl::read_xlsx('CaseStudy2CompSet No Salary.xlsx')
+# str(dfu)
+# dfu <- dfu %>% select(-c(StandardHours,Over18,EmployeeCount,EmployeeNumber,ID,
+#                        PerformanceRating,Department,Attrition,MaritalStatus))
+# 
+# # Proportion of Total Career Spent at Current Company
+# dfu$TotalWorkingYears[dfu$TotalWorkingYears==0]=0.00001
+# dfu$YearsAtCompany[dfu$YearsAtCompany==0]=0.00001
+# dfu <- dfu %>% mutate(PropYearsCompany = YearsAtCompany/TotalWorkingYears)
+# 
+# reg_dfu <- dummy_cols(dfu, select_columns = c("EducationField", "Gender","JobRole",
+#                                             "OverTime","BusinessTravel"), 
+#                      remove_selected_columns = TRUE)
+# 
+# scaled_dfu <- reg_dfu %>% mutate_each(funs(scale(.) %>% as.vector))
+# 
+# scaled_dfu <- scaled_dfu %>% select(JobLevel, `JobRole_Research Director`,
+#                               JobRole_Manager, TotalWorkingYears, 
+#                               `JobRole_Laboratory Technician`,
+#                               BusinessTravel_Travel_Rarely,
+#                               `JobRole_Manufacturing Director`,
+#                               MonthlyRate, PropYearsCompany,
+#                               YearsSinceLastPromotion, DailyRate,
+#                               Gender_Female, DistanceFromHome)
+# 
+# predict_df <- data.frame(predict(stepmod2,scaled_dfu))
+# 
+# ##### Write prediction to file:
+# dfu <- readxl::read_xlsx('CaseStudy2CompSet No Salary.xlsx')
+# 
+# predict_submit <- data.frame("ID"=dfu$ID, "MonthlyIncome"=predict_df$predict.stepmod2..scaled_dfu.)
+# 
+# write_csv(predict_submit,'./Salary_Predictions.csv')
 ```
