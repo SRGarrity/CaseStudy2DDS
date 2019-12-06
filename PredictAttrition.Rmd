@@ -446,7 +446,32 @@ ggplot(m)
 
 ```
 
+# Predict Attrition and Write to File
+```{r}
+dfu <- read.csv('CaseStudy2CompSet No Attrition.csv', header=TRUE)
+# Remove unnecessary columns:
+drop <- c("StandardHours","Over18","EmployeeCount","EmployeeNumber","ID",
+          "PerformanceRating")
+dfu <- dfu[,!(names(dfu) %in% drop)]
+
+# Proportion of Total Career Spent at Current Company
+dfu$TotalWorkingYears[dfu$TotalWorkingYears==0]=0.00001
+dfu$YearsAtCompany[dfu$YearsAtCompany==0]=0.00001
+dfu <- dfu %>% mutate(PropYearsCompany = YearsAtCompany/TotalWorkingYears)
+# Average Number of Years Per Company
+dfu$NumCompaniesWorked[dfu$NumCompaniesWorked==0]=0.00001
+dfu <- dfu %>% mutate(AvgYearsPerCompany = TotalWorkingYears/NumCompaniesWorked)
+# Average Years Per Company - Years At Company
+dfu <- dfu %>% mutate(YrPerCompMinusYrAtCompany = AvgYearsPerCompany - YearsAtCompany)
+
+must_convert <- sapply(dfu,is.factor)
+converted_features <- sapply(dfu[,must_convert],unclass)
+numdfu <- cbind(dfu[,!must_convert],converted_features)
+numdfu$Attrition <- dfu$Attrition
+numdfu$TotalWorkingYears <- NULL
+numdfu$YearsAtCompany <- NULL
 
 
 
-```
+
+
