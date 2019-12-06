@@ -21,6 +21,9 @@ library(fastDummies)
 library(doSNOW)
 library(parallel)
 library(lmvar)
+library(olsrr)
+library(RcmdrPlugin.survival)
+library(MASS)
 ```
 
 # Set up system for using parallel processing during model training
@@ -62,23 +65,7 @@ reg_df <- dummy_cols(df, select_columns = c("EducationField", "Gender","JobRole"
 ```
 
 
-# Fit models
-```{r}
-# # Set seed for reproducibility
-# set.seed(123)
-# # Set up repeated k-fold cross-validation
-# tc <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
-# # Train the model
-# step_model <- train(MonthlyIncome ~., data = reg_df,
-#                     preProcess = c("BoxCox","center","scale"),
-#                     method = "leapBackward", 
-#                     tuneGrid = data.frame(nvmax = 1:10),
-#                     trControl = tc,
-#                     metric="RMSE")
-# step_model$results
-
-```
-
+# Fit models using backward/forward/stepwise selection
 ```{r}
 # reg_df$logIncome <- log(reg_df$MonthlyIncome)
 # reg_df$MonthlyIncome <- NULL
@@ -87,7 +74,7 @@ reg_df <- dummy_cols(df, select_columns = c("EducationField", "Gender","JobRole"
 scaled_df <- reg_df %>% select(-MonthlyIncome) %>% mutate_each(funs(scale(.) %>% as.vector))
 scaled_df$Income <- reg_df$MonthlyIncome
 
-fullmod <- glm(Income ~ ., data=scaled_df, x=TRUE, y=TRUE)
+fullmod <- lm(Income ~ ., data=scaled_df, x=TRUE, y=TRUE)
 summary(fullmod)
 RSS_fullmod <- c(crossprod(fullmod$residuals))
 MSE_fullmod <- RSS_fullmod / length(fullmod$residuals)
@@ -154,7 +141,7 @@ for (i in c(1:20)) {
 rmse_Full/20 # 1081.402
 rmse_Back/20 # 1055.917
 rmse_For/20 # 1055.917
-rmse_Step/20 # 1055.195
+rmse_Step/20 # 1055.195 ********WINNER********
 
 ### Now use CV to determine whether or not Gender_Female and DistanceFromHome should be included in the final model
 step_wo_Gender_Female <- lm(Income~JobLevel + `JobRole_Research Director` +
@@ -200,10 +187,88 @@ for (i in c(1:20)) {
   rmse_wo_Either=rmse_wo_Either + woE$MSE_sqrt[[1]]
 } 
 
-rmse_base/20 # 
-rmse_wo_Gender_Female/20 # 
-rmse_wo_DistanceFromHome/20 # 
-rmse_wo_Either/20 #
+rmse_base/20 # 1055.195***********WINNER*********
+rmse_wo_Gender_Female/20 # 1055.543
+rmse_wo_DistanceFromHome/20 # 1055.442
+rmse_wo_Either/20 # 1055.826
+
+########## A few more diagnostics:
+# check to make sure that we don't have problems with multicolinearity
+step_vif <- vif(stepmod2)
+
+
+fullmod_eval <- lm(Income ~ ., data=scaled_df)
+k <- ols_step_both_p(fullmod_eval, pent=0.15, prem=0.2)
+
+xs <- 1:k$steps
+par(mfrow=c(2,2))
+par(mar=c(4,5,1,1))
+plot(xs,k$adjr,xlab="step", ylab=expression(paste("adjusted R"^"2")),type="ol",pch=16,col='gray50')
+plot(xs,k$mallows_cp,xlab="step", ylab="C(p)",type="ol",pch=16,col='gray50')
+plot(xs,k$sbc,xlab="step", ylab="BIC",type="ol",pch=16,col='gray50')
+plot(xs,k$aic,xlab="step", ylab="AIC",type="ol",pch=16,col='gray50')
+dev.off()
+
+# fit diagnostics
+par(mfrow=c(2,2))
+
+# plot residuals
+plot(scaled_df$Income, stepmod2$fitted.values, xlab="Observed Monthly Income ($)", ylab="Predictions ($)", main="Fitted Model")
+abline(lm(stepmod2$fitted.values~scaled_df$Income), col="grey10")
+
+# Studentized Residuals:
+plot(stepmod2$fitted.values, studres(stepmod2), xlab="Fitted values ($)", ylab = "Studentized Residuals", main = "Studentized Residuals")
+lines(c(0,22000), c(2,2), col="grey10")
+lines(c(0,22000), c(-2,-2), col="grey10")
+
+# QQ-plot of Residuals:
+qqnorm(studres(stepmod2), ylab="Standardized Residuals", xlab="Normal Scores", 
+       main="QQ-Plot of Residuals") 
+qqline(studres(stepmod2), col="grey10")
+
+# Histogram of Residuals:
+hist(stepmod2$residuals, prob=TRUE, xlab="residual (observed-predicted)", main="Histogram of Residuals",ylim=c(0,4e-04))
+lines(density(stepmod2$residuals), col="dodgerblue")
+dev.off()
+
+
+```
+
+# Load unlabeled data and predict
+```{r}
+dfu <- readxl::read_xlsx('CaseStudy2CompSet No Salary.xlsx')
+str(dfu)
+dfu <- dfu %>% select(-c(StandardHours,Over18,EmployeeCount,EmployeeNumber,ID,
+                       PerformanceRating,Department,Attrition,MaritalStatus))
+
+# Proportion of Total Career Spent at Current Company
+dfu$TotalWorkingYears[dfu$TotalWorkingYears==0]=0.00001
+dfu$YearsAtCompany[dfu$YearsAtCompany==0]=0.00001
+dfu <- dfu %>% mutate(PropYearsCompany = YearsAtCompany/TotalWorkingYears)
+
+reg_dfu <- dummy_cols(dfu, select_columns = c("EducationField", "Gender","JobRole",
+                                            "OverTime","BusinessTravel"), 
+                     remove_selected_columns = TRUE)
+
+scaled_dfu <- reg_dfu %>% mutate_each(funs(scale(.) %>% as.vector))
+
+scaled_dfu <- scaled_dfu %>% select(JobLevel, `JobRole_Research Director`,
+                              JobRole_Manager, TotalWorkingYears, 
+                              `JobRole_Laboratory Technician`,
+                              BusinessTravel_Travel_Rarely,
+                              `JobRole_Manufacturing Director`,
+                              MonthlyRate, PropYearsCompany,
+                              YearsSinceLastPromotion, DailyRate,
+                              Gender_Female, DistanceFromHome)
+
+predict_df <- data.frame(predict(stepmod2,scaled_dfu))
+
+##### Write prediction to file:
+dfu <- readxl::read_xlsx('CaseStudy2CompSet No Salary.xlsx')
+
+predict_submit <- data.frame("ID"=dfu$ID, "MonthlyIncome"=predict_df$predict.stepmod2..scaled_dfu.)
+
+write_csv(predict_submit,'./Salary_Predictions.csv')
 
 
 ```

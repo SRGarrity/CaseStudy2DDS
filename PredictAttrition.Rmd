@@ -116,13 +116,17 @@ numdf$Department <- NULL
 # prepare training scheme
 control <- trainControl(method="repeatedcv", number=10, repeats=3)
 # train the model
-model <- train(Attrition~., data=numdf, method="lvq", preProcess=c("scale","center"), trControl=control, metric = "Kappa")
+model <- train(Attrition~., data=numdf, method="lvq", preProcess=c("BoxCox", "scale","center"), search="grid", trControl=control, metric = "Kappa")
 # estimate variable importance
 importance <- varImp(model, scale=TRUE)
 # summarize importance
 print(importance)
 # plot importance
 plot(importance)
+
+CM_lvq <- confusionMatrix(predict(model,numdf[,!names(numdf) %in% "Attrition"]),
+                          numdf$Attrition)
+CM_lvq
 ```
 
 # Feature Selection:
@@ -429,8 +433,14 @@ cl <- makeCluster(numberofcores, type = "SOCK")
 # Register cluster so that caret will know to train in parallel.
 registerDoSNOW(cl)
 
-
-
+# variable importance plots are stable, try using the those with importance > 50
+ada_df <- numdf %>% select(Attrition, AvgYearsPerCompany, OverTime, MonthlyIncome,
+                           YearsAtCompany, StockOptionLevel, MaritalStatus, JobLevel,
+                           YearsInCurrentRole, Age, JobInvolvement, JobSatisfaction, 
+                           JobRole, DistanceFromHome, EnvironmentSatisfaction,
+                           WorkLifeBalance, TrainingTimesLastYear, Education,
+                           NumCompaniesWorked, BusinessTravel, DailyRate,
+                           MonthlyRate, HourlyRate,RelationshipSatisfaction)
 
 ctrl <- trainControl(method = "cv", number = 5, classProbs = TRUE, allowParallel = TRUE, search="grid")
 # m <- train(Attrition~.,data=num_df, 
@@ -440,10 +450,16 @@ ctrl <- trainControl(method = "cv", number = 5, classProbs = TRUE, allowParallel
 #                              metric = "Accuracy", 
 #                              preProc = c("BoxCox","center", "scale"))
 
+searchgrid <- expand.grid(iter=seq(250,750, by=50),
+                    maxdepth=c(2,3,4),
+                    nu = c(0.075, 0.1, 0.125))
+
+set.seed(12)
 m <- train(Attrition~.,data=numdf,
            trControl = ctrl,
            method = "ada",
-           tuneLength=6,
+           # tuneLength = 12,
+           tuneGrid=searchgrid,
            metric="Kappa",
            preProc = c("BoxCox","center", "scale"))
 
