@@ -20,6 +20,6 @@ See the Rmarkdown file "PredictSalary.Rmd" for details. Main components:
 
 ## Presentation:
 1. Slide deck summarizing the data analysis and conclusions ("CaseStudy2.pptx")
-2. YouTube presentation of slide deck ("https://youtube.com")
+2. YouTube presentation of slide deck (https://youtu.be/4P_7kmHEHbA)
 
 
